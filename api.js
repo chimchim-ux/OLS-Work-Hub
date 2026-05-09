@@ -1,19 +1,27 @@
 // ============================================================
 // js/api.js — All backend calls in one place.
 // Change API_URL here and nowhere else.
-// CRITICAL: Access code is NEVER stored in session.
-// Protected calls require explicit name + code params.
-// Backend returns UPPERCASE field names (ID, Client, Status, etc.)
+// CRITICAL:
+// - Access code is NEVER stored in session (Auth Blueprint §7)
+// - Protected calls require explicit useID + code params
+// - Login identifier is useID (lowercase: "chim", "tih"), NOT display Name
+// - Backend expects param name "name" for the useID value
+// - Backend returns UPPERCASE field names (ID, Client, Status, estRevenue)
 // ============================================================
 
 var API_URL = 'https://script.google.com/macros/s/AKfycbzREK-f4OAp7El-Y31ReM5w8yoFMsPFTra3kL5ooHf_UYC6CQWvIZ351Clr0UuF9hVdkg/exec';
 
 var api = {
 
-  // ── INTERNAL: Auth helper (session contains name/role/userId ONLY)
+  // ── INTERNAL: Auth helper (session contains role, userId=useID, name=displayName ONLY)
+  // code is NEVER in session — caller manages it in memory
   _auth: function() {
     var s = auth.getSession();
-    return s ? { name: s.name, role: s.role, userId: s.userId } : {};
+    return s ? { 
+      role: s.role, 
+      userId: s.userId,  // useID from USERS tab (e.g., "chim") — login identifier
+      name: s.name       // Display Name from USERS tab (e.g., "Ami") — UI only
+    } : {};
   },
 
   // ── INTERNAL: GET request with cache-busting
@@ -35,9 +43,9 @@ var api = {
   // ── INTERNAL: POST request (NO auto code injection)
   _post: function(payload, cb) {
     var authData = this._auth();
-    // Inject name/userId from session if available (code must be passed explicitly)
-    if (authData.name) payload.name = authData.name;
+    // Inject userId/name from session if available (code must be passed explicitly)
     if (authData.userId) payload.userId = authData.userId;
+    if (authData.name) payload.name = authData.name;
     
     fetch(API_URL, {
       method: 'POST',
@@ -62,91 +70,93 @@ var api = {
     this._get({ action:'getUsers' }, cb);
   },
 
-  login: function(name, code, cb) {
-    this._get({ action:'login', name:name, code:code }, cb);
+  // Login: useID is the lowercase identifier from USERS tab (e.g., "chim")
+  // Backend expects param "name" to carry the useID value
+  login: function(useID, code, cb) {
+    this._get({ action:'login', name:useID, code:code }, cb);
   },
 
-  // ── PROTECTED GET ENDPOINTS (explicit name+code required) ──
+  // ── PROTECTED GET ENDPOINTS (explicit useID+code required) ──
   // Code is NOT in session — caller must pass it from login flow
 
-  getData: function(name, code, cb) {
-    this._get({ action:'getData', name:name, code:code }, cb);
+  getData: function(useID, code, cb) {
+    this._get({ action:'getData', name:useID, code:code }, cb);
   },
 
-  getSettings: function(name, code, cb) {
-    this._get({ action:'getSettings', name:name, code:code }, cb);
+  getSettings: function(useID, code, cb) {
+    this._get({ action:'getSettings', name:useID, code:code }, cb);
   },
 
   // ── PROTECTED POST ENDPOINTS (role-gated + explicit code) ──
 
-  sync: function(entity, payload, name, code, cb) {
+  sync: function(entity, payload, useID, code, cb) {
     // Allow backward-compatible signature: sync(entity, payload, cb)
-    if (typeof name === 'function') { cb = name; name = null; code = null; }
+    if (typeof useID === 'function') { cb = useID; useID = null; code = null; }
     else if (typeof code === 'function') { cb = code; code = null; }
     
     payload.action = 'sync';
     payload.entity = entity;
-    if (name) payload.name = name;
-    if (code) payload.code = code; // explicit code required for auth
+    if (useID) payload.name = useID;  // backend expects 'name' param for useID value
+    if (code) payload.code = code;
     
     this._post(payload, cb);
   },
 
-  delete: function(entity, id, name, code, cb) {
-    // Role guard per Main Blueprint §2
+  delete: function(entity, id, useID, code, cb) {
+    // Role guard per Main Blueprint §2: Master Admin only
     if (!auth.isRole('masterAdmin')) {
       console.warn('Delete requires masterAdmin role');
       if (cb) cb({ success:false, error:'Permission denied' });
       return;
     }
     // Allow backward-compatible signature
-    if (typeof name === 'function') { cb = name; name = null; code = null; }
+    if (typeof useID === 'function') { cb = useID; useID = null; code = null; }
     else if (typeof code === 'function') { cb = code; code = null; }
     
     var payload = { action:'delete', entity:entity, id:id };
-    if (name) payload.name = name;
+    if (useID) payload.name = useID;
     if (code) payload.code = code;
     
     this._post(payload, cb);
   },
 
-  override: function(entity, payload, name, code, cb) {
-    // Role guard per Main Blueprint §2
+  override: function(entity, payload, useID, code, cb) {
+    // Role guard per Main Blueprint §2: Master Admin only
     if (!auth.isRole('masterAdmin')) {
       console.warn('Override requires masterAdmin role');
       if (cb) cb({ success:false, error:'Permission denied' });
       return;
     }
     // Allow backward-compatible signature
-    if (typeof name === 'function') { cb = name; name = null; code = null; }
+    if (typeof useID === 'function') { cb = useID; useID = null; code = null; }
     else if (typeof code === 'function') { cb = code; code = null; }
     
     payload.action = 'override';
     payload.entity = entity;
-    if (name) payload.name = name;
+    if (useID) payload.name = useID;
     if (code) payload.code = code;
     
     this._post(payload, cb);
   },
 
   // ── ACTIVITY LOGGING (fire-and-forget) ──
+  // logAction param renamed to avoid shadowing 'action' payload key
 
-  logActivity: function(logAction, type, itemId, client, summary, name, code) {
+  logActivity: function(logAction, type, itemId, client, summary, useID, code) {
     // Allow minimal signature for internal use
-    if (typeof name !== 'string') {
+    if (typeof useID !== 'string') {
       var a = this._auth();
-      name = a.name;
-      // code not required for logging — backend decides
+      useID = a.userId;  // use userId (useID) for logging
     }
     
     this._post({ 
       action: 'logActivity', 
-      logAction: logAction,   // ✅ distinct key to avoid shadowing
+      logAction: logAction,   // ✅ distinct key to avoid shadowing 'action'
       type: type, 
       itemId: itemId, 
       client: client, 
       summary: summary,
-      name: name,
+      name: useID,            // backend expects 'name' param for useID value
       code: code
     }, function(resp) {
       if (resp && !resp.success) {
@@ -157,36 +167,36 @@ var api = {
 
   // ── SETTINGS & USER MANAGEMENT (Master Admin only) ──
 
-  updateSettings: function(key, value, name, code, cb) {
+  updateSettings: function(key, value, useID, code, cb) {
     if (!auth.isRole('masterAdmin')) {
       console.warn('updateSettings requires masterAdmin role');
       if (cb) cb({ success:false, error:'Permission denied' });
       return;
     }
-    if (typeof name === 'function') { cb = name; name = null; code = null; }
+    if (typeof useID === 'function') { cb = useID; useID = null; code = null; }
     else if (typeof code === 'function') { cb = code; code = null; }
     
     this._post({ 
       action:'updateSettings', 
       key:key, 
       value:value, 
-      name:name, 
+      name:useID, 
       code:code 
     }, cb);
   },
 
-  updateUser: function(userAction, payload, name, code, cb) {
+  updateUser: function(userAction, payload, useID, code, cb) {
     if (!auth.isRole('masterAdmin')) {
       console.warn('updateUser requires masterAdmin role');
       if (cb) cb({ success:false, error:'Permission denied' });
       return;
     }
-    if (typeof name === 'function') { cb = name; name = null; code = null; }
+    if (typeof useID === 'function') { cb = useID; useID = null; code = null; }
     else if (typeof code === 'function') { cb = code; code = null; }
     
     payload.action = 'updateUser';
     payload.userAction = userAction;
-    if (name) payload.name = name;
+    if (useID) payload.name = useID;
     if (code) payload.code = code;
     
     this._post(payload, cb);
@@ -197,25 +207,25 @@ var api = {
 
   getDataWithSession: function(code, cb) {
     var s = auth.getSession();
-    if (!s || !s.name) {
+    if (!s || !s.userId) {
       if (cb) cb({ success:false, error:'Not authenticated' });
       return;
     }
     // Caller must supply code explicitly — it is NOT in session
-    this.getData(s.name, code, cb);
+    this.getData(s.userId, code, cb);
   },
 
   // ── UTILITY: Refresh all data via state module ──
   refreshAll: function(code, cb) {
     var s = auth.getSession();
-    if (!s || !s.name) {
+    if (!s || !s.userId) {
       if (cb) cb({ success:false, error:'Not authenticated' });
       return;
     }
     if (typeof state !== 'undefined' && typeof state.refresh === 'function') {
-      state.refresh(s.name, code, cb);
+      state.refresh(s.userId, code, cb);
     } else {
-      this.getData(s.name, code, cb);
+      this.getData(s.userId, code, cb);
     }
   }
 };
