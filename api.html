@@ -1,0 +1,99 @@
+<script>
+// ============================================================
+// api.html — All backend calls in one place.
+// Change API_URL here and nowhere else.
+// All calls inject name+code from session automatically.
+// ============================================================
+
+var API_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+
+var api = {
+
+  _auth: function() {
+    var s = auth.getSession();
+    return s ? { name: s.name, code: s.code } : {};
+  },
+
+  _get: function(params, cb) {
+    params.t = Date.now(); // cache-bust
+    var qs = Object.keys(params).map(function(k){ return k+'='+encodeURIComponent(params[k]); }).join('&');
+    fetch(API_URL + '?' + qs)
+      .then(function(r){ return r.json(); })
+      .then(cb)
+      .catch(function(e){ console.error('API GET error', e); cb({ success:false, error:e.message }); });
+  },
+
+  _post: function(payload, cb) {
+    var auth = this._auth();
+    payload.name = auth.name;
+    payload.code = auth.code;
+    fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(function(r){ return r.json(); })
+      .then(cb)
+      .catch(function(e){ console.error('API POST error', e); cb({ success:false, error:e.message }); });
+  },
+
+  // ── PUBLIC ──
+  health: function(cb) {
+    this._get({ action:'health' }, cb);
+  },
+
+  getUsers: function(cb) {
+    this._get({ action:'getUsers' }, cb);
+  },
+
+  login: function(name, code, cb) {
+    this._get({ action:'login', name:name, code:code }, cb);
+  },
+
+  // ── PROTECTED ──
+  getData: function(name, code, cb) {
+    this._get({ action:'getData', name:name, code:code }, cb);
+  },
+
+  getSettings: function(cb) {
+    var a = this._auth();
+    this._get({ action:'getSettings', name:a.name, code:a.code }, cb);
+  },
+
+  // ── SYNC (create / update) ──
+  sync: function(entity, payload, cb) {
+    payload.action = 'sync';
+    payload.entity = entity;
+    this._post(payload, cb);
+  },
+
+  // ── DELETE ──
+  delete: function(entity, id, cb) {
+    this._post({ action:'delete', entity:entity, id:id }, cb);
+  },
+
+  // ── OVERRIDE ──
+  override: function(entity, payload, cb) {
+    payload.action = 'override';
+    payload.entity = entity;
+    this._post(payload, cb);
+  },
+
+  // ── LOG ACTIVITY ──
+  logActivity: function(action, type, itemId, client, summary) {
+    this._post({ action:'logActivity', action:action, type:type, itemId:itemId, client:client, summary:summary }, function(){});
+  },
+
+  // ── UPDATE SETTINGS ──
+  updateSettings: function(key, value, cb) {
+    this._post({ action:'updateSettings', key:key, value:value }, cb);
+  },
+
+  // ── UPDATE USER ──
+  updateUser: function(userAction, payload, cb) {
+    payload.action     = 'updateUser';
+    payload.userAction = userAction;
+    this._post(payload, cb);
+  },
+};
+</script>
