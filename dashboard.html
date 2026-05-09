@@ -150,4 +150,19 @@ function renderCurrentPage() {
     }
   });
 }
+  grid.innerHTML = items.map(function(item) {
+  var e = item.entity;
+  // Fallback to deadline and status if milestone object doesn't exist
+  var dlLabel = e.deadline ? utils.shortDate(e.deadline) : e.status;
+  var days = utils.daysUntil(e.deadline);
+  var delta = (days !== null) ? ' (' + (days >= 0 ? '+' : '') + days + 'd)' : '';
+
+  return '<div class="focus-card">'
+    + '<div class="focus-top">' + utils.entityBadge(item.type) + '<span class="focus-dl">' + dlLabel + delta + '</span></div>'
+    + '<div class="focus-ws">' + e.workstream + '</div>'
+    + '<div class="focus-client">' + e.client + '</div>'
+    + (e.estRevenue ? '<div class="focus-rev">' + utils.formatIDR(e.estRevenue) + '</div>' : '')
+    + '</div>';
+}).join('');
+  window.render_dashboard = renderDashboard;
 </script>
