@@ -3,51 +3,131 @@
 // locks.html — Edit lock management.
 // Open on modal → clear on save/cancel.
 // Conflict check: compare Updated timestamps.
+// EDITLOCKS tab tracking per Schema Blueprint §7.
 // ============================================================
 
 var locks = {
-  _pending: null, // { entity, payload } for override flow
+  _pending: null, // { entity, payload, originalUpdated } for override flow
 
+  // ── OPEN LOCK: Write to EDITLOCKS tab on modal open
   open: function(itemId) {
-    // Fire-and-forget: log that this user opened the record
-    api.logActivity('EDIT', 'lock', itemId, '', 'Opened for editing');
+    var s = auth.getSession();
+    if (!s || !itemId) return;
+    
+    // Fire-and-forget: write lock row to EDITLOCKS tab
+    api._post({
+      action: 'sync',
+      entity: 'editlocks',
+      ItemId: itemId,
+      UserId: s.userId,
+      UserName: s.name,
+      Timestamp: utils.nowWIB()
+    }, function(){});
   },
 
+  // ── CLEAR LOCK: Remove from EDITLOCKS tab on save/cancel
   clear: function(itemId) {
-    // No-op on frontend — backend clears on sync/delete
-    // Kept for future explicit EDITLOCKS endpoint
+    if (!itemId) return;
+    // Fire-and-forget: delete lock row
+    api._post({
+      action: 'delete',
+      entity: 'editlocks',
+      id: itemId
+    }, function(){});
   },
 
-  // Called after a sync returns conflict:true
-  // Stores payload so Override button can retry
-  storeConflict: function(entity, payload) {
-    this._pending = { entity:entity, payload:payload };
-    document.getElementById('conflictModal').classList.add('open');
-    document.getElementById('conflictOverride').onclick = function() {
-      locks.doOverride();
+  // ── CONFLICT CHECK: Client-side timestamp comparison
+  // Returns { conflict: bool, lockedBy: string|null }
+  check: function(itemId, savedUpdated, currentUpdated) {
+    if (!savedUpdated || !currentUpdated) {
+      return { conflict: false, lockedBy: null };
+    }
+    // Timestamps differ → potential conflict
+    if (savedUpdated !== currentUpdated) {
+      // In a full implementation, query EDITLOCKS to find who has the lock
+      // For now, generic message; backend can enrich response if needed
+      return { conflict: true, lockedBy: 'another user' };
+    }
+    return { conflict: false, lockedBy: null };
+  },
+
+  // ── STORE CONFLICT: Called after sync returns conflict:true
+  storeConflict: function(entity, payload, originalUpdated) {
+    this._pending = { 
+      entity: entity, 
+      payload: payload,
+      originalUpdated: originalUpdated // for audit
     };
+    
+    var modal = document.getElementById('conflictModal');
+    var overrideBtn = document.getElementById('conflictOverride');
+    var cancelBtn = document.getElementById('conflictCancel');
+    
+    if (!modal) {
+      console.warn('Conflict modal not found');
+      return;
+    }
+    
+    // Show modal
+    modal.classList.add('open');
+    
+    // Override button (Master Admin only)
+    if (overrideBtn) {
+      overrideBtn.style.display = auth.isRole('masterAdmin') ? '' : 'none';
+      overrideBtn.onclick = function() { locks.doOverride(); };
+    }
+    
+    // Cancel button
+    if (cancelBtn) {
+      cancelBtn.onclick = function() { locks.closeConflict(); };
+    }
   },
 
+  // ── DO OVERRIDE: Master Admin only, bypasses conflict check
   doOverride: function() {
-    if (!this._pending) return;
+    if (!auth.isRole('masterAdmin')) {
+      utils.toast('Override requires Master Admin role', 'error');
+      return;
+    }
+    
+    if (!this._pending) {
+      console.warn('No pending conflict to override');
+      return;
+    }
+    
     var e = this._pending.entity;
     var p = this._pending.payload;
     this._pending = null;
-    document.getElementById('conflictModal').classList.remove('open');
+    
+    // Hide modal
+    var modal = document.getElementById('conflictModal');
+    if (modal) modal.classList.remove('open');
+    
+    // Call override endpoint
     api.override(e, p, function(data) {
-      if (data.success) {
+      if (data && data.success) {
         utils.toast('Override saved.', 'success');
-        closeModal();
-        state.refresh(function(){ renderCurrentPage(); });
+        // Clear lock since we just saved
+        if (p.ID) locks.clear(p.ID);
+        // Refresh data and re-render
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof state !== 'undefined' && typeof state.refresh === 'function') {
+          state.refresh(function(){ 
+            if (typeof renderCurrentPage === 'function') renderCurrentPage(); 
+          });
+        }
       } else {
-        utils.toast('Override failed: ' + data.error, 'error');
+        var errMsg = (data && data.error) ? data.error : 'Unknown error';
+        utils.toast('Override failed: ' + errMsg, 'error');
       }
     });
   },
-};
 
-function closeConflict() {
-  locks._pending = null;
-  document.getElementById('conflictModal').classList.remove('open');
-}
+  // ── CLOSE CONFLICT MODAL: Cancel path
+  closeConflict: function() {
+    this._pending = null;
+    var modal = document.getElementById('conflictModal');
+    if (modal) modal.classList.remove('open');
+  }
+};
 </script>
